@@ -22,18 +22,13 @@ protocols it has spoken since 2007.
 | Maintenance | head cleaning, cartridge alignment, internal pages |
 | Control page | `http://<host>:8633/` — status, supplies, maintenance |
 
-It appears as an ordinary driverless printer and scanner — the "Kind" below
-is `HP Photosmart C4380-AirPrint`, with no driver installed:
+It appears as an ordinary driverless printer and scanner. The "Kind" is
+`HP Photosmart C4380-AirPrint`, and there is no driver installed:
 
-<p>
-<img src="docs/screenshots/printers-and-scanners.png" alt="The printer in System Settings" width="46%">
-<img src="docs/screenshots/printer-details.png" alt="Printer details showing AirPrint kind" width="45%">
+<p align="center">
+  <img src="docs/screenshots/printers-and-scanners.png" width="49%" alt="The printer in System Settings, among ordinary printers">
+  <img src="docs/screenshots/printer-details.png" width="49%" alt="Printer details showing an AirPrint kind and no driver">
 </p>
-
-And a control page for status, supplies and the maintenance functions that
-otherwise live only in HP Utility:
-
-![The Kerchunk control page](docs/screenshots/control-page.png)
 
 ## Requirements
 
@@ -260,7 +255,10 @@ SCL on TCP **9290** directly, so no vendor code is needed at all.
 
 `bin/scl.py` implements that protocol; `bin/escl-server.py` wraps it in an
 eSCL/AirScan service so Apple's own `AirScanScanner.app` — a universal binary
-in `/System`, not a third-party plugin — drives it.
+in `/System`, not a third-party plugin — drives it. Image Capture, Preview and
+mobile scan apps then treat it as any other network scanner:
+
+![Scanning from Image Capture](docs/screenshots/image-capture.png)
 
     printing   ippeveprinter  →  gs → PCL3GUI      →  :9100
     scanning   escl-server.py →  SCL → JPEG        ←  :9290
@@ -375,6 +373,8 @@ attributes, also set from the print command via `ATTR:`:
 so the tri-colour cartridge is described as genuinely three-coloured rather
 than flat black.
 
+![Supply levels in System Settings](docs/screenshots/supply-levels.png)
+
 Going through `marker-*` matters for a second reason. The pane otherwise
 embeds `printer-supply-info-uri`, which ippeveprinter builds as an `https://`
 URL served with the self-signed certificate -- a WebView will not silently
@@ -435,6 +435,8 @@ diagnostic).
 `http://<host>:8633/` — served by the scan bridge, so it is plain HTTP with no
 certificate warnings, and reachable from the Mac, an iPhone, anything on the
 LAN. It shows status, supplies and the maintenance buttons.
+
+![The Kerchunk control page](docs/screenshots/control-page.png)
 
 It exists because ippeveprinter's own web UI cannot be extended or restyled.
 That page has three fixed tabs, and its supply bars pick a colour by
