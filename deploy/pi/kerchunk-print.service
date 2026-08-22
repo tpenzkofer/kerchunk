@@ -1,0 +1,27 @@
+[Unit]
+Description=HP Photosmart C4380 IPP Everywhere / AirPrint bridge
+Documentation=file:///opt/kerchunk/README.md
+After=network-online.target avahi-daemon.service
+Wants=network-online.target
+Requires=avahi-daemon.service
+
+[Service]
+Type=simple
+ExecStart=/opt/kerchunk/bin/start-server.sh
+Restart=on-failure
+RestartSec=10
+
+User=kerchunk
+Group=kerchunk
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/opt/kerchunk/var
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+MemoryMax=512M
+
+[Install]
+WantedBy=multi-user.target
