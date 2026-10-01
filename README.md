@@ -33,6 +33,9 @@ It appears as an ordinary driverless printer and scanner. The "Kind" is
 ## Requirements
 
 - An HP Photosmart C4380 **on the network** (not USB), switched on.
+  Put its **`.local` name** in `PRINTER_IP`, not an address — DHCP moves
+  printers, and `HP______.local` follows them. Every consumer here passes the
+  value straight to a socket call, so a name works everywhere an address does.
 - A Raspberry Pi running Debian 12/13, or a Mac. Anything that runs Python 3
   and Ghostscript will do; a Pi 4 is comfortable.
 - `ghostscript`, `cups-ipp-utils`, `avahi-daemon`, `avahi-utils`, `python3`.
@@ -58,6 +61,30 @@ On a Mac instead:
 The printer and scanner then advertise themselves; macOS and iOS find them
 without any driver. See **Running it on a Mac instead** for why the Pi is the
 better host.
+
+## When it looks offline
+
+Two things cause this, and neither is the bridge:
+
+- **The printer moved.** DHCP reassigns it and the configured address goes
+  dead. `bin/find-printer.sh` locates it again; the fix is to configure the
+  `.local` name rather than the new address, which is immune to the next move.
+- **mDNS cannot reach it.** Bonjour is link-local multicast with TTL 1, so it
+  does not cross a VPN or route between subnets. A queue with a `dnssd://`
+  device URI then cannot resolve and macOS reports the printer offline, while
+  unicast still works perfectly. If you print across a tunnel, give the queue
+  a direct address instead:
+
+      lpadmin -p <queue> -v ipp://<pi-address>:8632/ipp/print
+
+  That pins the Pi's address, so give the Pi a DHCP reservation first.
+
+Check the bridge itself before assuming it is at fault:
+
+    systemctl is-active kerchunk-print kerchunk-scan   # on the Pi
+    bin/printer_status.py                              # does the printer answer?
+    ipptool -t ipp://<pi>:8632/ipp/print \
+        /usr/share/cups/ipptool/get-printer-attributes.test
 
 ## Scope, and what this is not
 
@@ -320,6 +347,24 @@ Notes:
   for. The 16-bit samples arrive **little-endian** and are byte-swapped on the
   way out, since PNG and PDF both read them big-endian; that was established
   by measuring which byte varies smoothly along a scanline.
+
+- **Monochrome needs a separate pass.** `-dBitsPerPixel=1` is rejected
+  outright by `chp2200` -- "rangecheck in .putdeviceprops", and the job dies,
+  so every black-and-white job fails. `-dBitsPerPixel=8` and `=32` are
+  accepted but render a near-empty page, and `-sColorConversionStrategy=Gray`
+  is *silently ignored* on that pass (byte-identical output to colour).
+  Converting the PDF to DeviceGray with a `pdfwrite` pass first, then
+  rendering normally, is the only one of those that genuinely changes the
+  output. True bi-level is not available; greyscale is the substitute.
+
+- **An SNMP walk must retry.** It rides on UDP and has only two stopping
+  conditions: the next OID leaving the subtree, which is the real end, and an
+  error, which is not. Treating them alike truncates the result -- one dropped
+  packet part way through the supplies table yields one cartridge instead of
+  two, which then gets published as the truth. Observed roughly one run in
+  five over Wi-Fi. `_walk()` retries each step and raises rather than
+  returning a partial table, so the caller says nothing instead of something
+  wrong.
 
 - The scan channel answers `01` instead of `00` when it has not finished
   releasing the previous session, so back-to-back scans need a retry — hpmud

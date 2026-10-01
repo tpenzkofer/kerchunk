@@ -10,11 +10,13 @@ route HPLIP takes (see GetSnmp() in io/hpmud/jd.c).
 
 Pure standard library: a minimal SNMPv1 GET rather than a net-snmp dependency.
 
-    ./printer_status.py --ip 192.168.1.50
-    ./printer_status.py --ip 192.168.1.50 --state   # STATE: line for CUPS
+    ./printer_status.py                      # uses etc/kerchunk.conf
+    ./printer_status.py --ip HP014507.local  # or name it explicitly
+    ./printer_status.py --state              # STATE:/ATTR: lines for CUPS
 """
 
 import argparse
+import os
 import socket
 import sys
 
@@ -160,14 +162,27 @@ def _as_int(tag, val):
     return int.from_bytes(val, 'big') if val else None
 
 
-def _walk(ip, root, limit=12, **kw):
-    """Minimal GETNEXT walk under one subtree."""
+def _walk(ip, root, limit=12, retries=2, **kw):
+    """Minimal GETNEXT walk under one subtree.
+
+    SNMP rides on UDP, so any single request can be lost -- and the walk has
+    only two ways to stop: the next OID leaving the subtree, which is the real
+    end, or an error, which is not. Conflating the two silently truncates the
+    result: a dropped packet half way through the supplies table yields one
+    cartridge instead of two, and we would then publish that as the truth.
+    So retry each step, and raise rather than return a partial table -- the
+    caller treats missing data as "say nothing", which leaves whatever the
+    client already knows intact.
+    """
     out, oid = [], root
     for _ in range(limit):
-        try:
-            oid, tag, val = snmp_get(ip, oid, next_=True, **kw)
-        except SnmpError:
-            break
+        for attempt in range(retries + 1):
+            try:
+                oid, tag, val = snmp_get(ip, oid, next_=True, **kw)
+                break
+            except SnmpError:
+                if attempt == retries:
+                    raise
         if not oid.startswith(root + '.'):
             break
         out.append((oid, tag, val))
@@ -202,7 +217,11 @@ def read_supplies(ip, **kw):
               for o, t, v in _walk(ip, OID_SUPPLY_LEVEL, **kw)}
     out = []
     for key in sorted(descrs, key=lambda x: int(x)):
-        level = levels.get(key)
+        if key not in levels:
+            # Description without a level: the two walks disagree, so this
+            # entry is incomplete rather than merely unmeasured.
+            continue
+        level = levels[key]
         percent = level if level is not None and 0 <= level <= 100 else None
         out.append({'name': descrs[key], 'level': level, 'percent': percent})
     return out
@@ -347,16 +366,39 @@ def supply_attrs(supplies):
     ]
 
 
+def conf_printer():
+    """PRINTER_IP from etc/kerchunk.conf, so --ip is optional here too.
+
+    It may be a hostname rather than an address, and usually should be: DHCP
+    moves printers, and a .local name follows them. Everything downstream
+    passes this straight to socket calls, which resolve names happily.
+    """
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    path = os.path.join(here, 'etc', 'kerchunk.conf')
+    if not os.path.exists(path):
+        return ''
+    with open(path) as fh:
+        for line in fh:
+            if line.startswith('PRINTER_IP'):
+                return line.split('=', 1)[1].strip().strip('"').strip("'")
+    return ''
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('--ip', required=True)
+    ap.add_argument('--ip', default=conf_printer() or None,
+                    help='printer address or hostname; defaults to '
+                         'PRINTER_IP in etc/kerchunk.conf')
     ap.add_argument('--community', default='public')
     ap.add_argument('--timeout', type=float, default=2.0)
     ap.add_argument('--state', action='store_true',
                     help='emit the "STATE:" and "ATTR:" lines ippeveprinter '
                          'reads from a print command, instead of a report')
     args = ap.parse_args()
+    if not args.ip:
+        ap.error('no printer address: pass --ip or set PRINTER_IP in '
+                 'etc/kerchunk.conf')
 
     st = read_status(args.ip, community=args.community, timeout=args.timeout)
 

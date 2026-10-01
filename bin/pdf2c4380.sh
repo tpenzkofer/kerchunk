@@ -71,19 +71,13 @@ case "${IPP_PRINT_QUALITY:-normal}" in
   *)      DPI="$RESOLUTION" ;;
 esac
 
-# --- colour mode ------------------------------------------------------------
-COLOR_OPTS=()
-case "${IPP_PRINT_COLOR_MODE:-color}" in
-  monochrome|bi-level) COLOR_OPTS=(-dBitsPerPixel=1) ;;
-esac
-
 # --- normalise input to PDF -------------------------------------------------
 # ippeveprinter may hand us JPEG or PostScript depending on what the client sent.
 # Spell the template out in full: BSD mktemp accepts "-t prefix", but GNU
 # mktemp requires a template ending in at least six X's, so "-t c4380" fails
 # on Linux. This form works on both.
 WORK="$(mktemp "${TMPDIR:-/tmp}/c4380.XXXXXX")" || die "cannot create temp file"
-trap 'rm -f "$WORK" "$WORK.pdf" "$WORK.prn"' EXIT
+trap 'rm -f "$WORK" "$WORK.pdf" "$WORK.grey.pdf" "$WORK.prn"' EXIT
 
 SRC="$JOB"
 
@@ -104,13 +98,40 @@ if [ "$(head -c 2 "$JOB" | od -An -tx1 | tr -d ' \n')" = "1f8b" ]; then
   SRC="$WORK.pdf"
 fi
 
+# --- colour mode ------------------------------------------------------------
+# Greyscale has to be done as a separate pdfwrite pass, because none of the
+# obvious shortcuts work on this device:
+#
+#   -dBitsPerPixel=1                 rejected outright, "rangecheck in
+#                                    .putdeviceprops", and the job dies
+#   -dBitsPerPixel=8 / =32           accepted but render a near-empty page
+#   -sColorConversionStrategy=Gray   silently ignored on the chp2200 pass
+#                                    (byte-identical output to colour)
+#
+# Converting the PDF to DeviceGray first and then rendering normally does
+# produce genuinely different output, so that is the route taken here.
+# True bi-level is not available at all; greyscale is the honest substitute.
+case "${IPP_PRINT_COLOR_MODE:-color}" in
+  monochrome|bi-level|auto-monochrome|process-monochrome)
+    log "monochrome requested: converting to greyscale before rendering"
+    if "$GS" -q -dNOPAUSE -dBATCH -dSAFER -sDEVICE=pdfwrite \
+            -sColorConversionStrategy=Gray -dProcessColorModel=/DeviceGray \
+            -sOutputFile="$WORK.grey.pdf" "$SRC" >> "$LOG" 2>&1 \
+       && [ -s "$WORK.grey.pdf" ]; then
+      SRC="$WORK.grey.pdf"
+    else
+      log "greyscale pass failed; printing in colour rather than failing"
+      echo "INFO: greyscale conversion unavailable, printing in colour" >&2
+    fi
+    ;;
+esac
+
 # --- convert ----------------------------------------------------------------
-log "gs device=$GS_DEVICE paper=$PAPER dpi=$DPI"
+log "gs device=$GS_DEVICE paper=$PAPER dpi=$DPI colour=${IPP_PRINT_COLOR_MODE:-color}"
 if ! "$GS" -q -dNOPAUSE -dBATCH -dSAFER \
         -sDEVICE="$GS_DEVICE" \
         -sPAPERSIZE="$PAPER" \
         -r"$DPI" \
-        "${COLOR_OPTS[@]}" \
         -sOutputFile="$WORK.prn" \
         "$SRC" >> "$LOG" 2>&1; then
   die "Ghostscript conversion failed (device=$GS_DEVICE) — see $LOG"
